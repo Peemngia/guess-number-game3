@@ -3,57 +3,42 @@
 <head>
 <meta charset="UTF-8">
 <title>เกมทายตัวเลขออนไลน์</title>
-
 <style>
-body{background:#111;color:#fff;text-align:center;font-family:sans-serif;margin-top:20px}
-input,button{padding:10px;font-size:16px;margin:4px}
-#result{margin:10px;font-size:18px}
-.good{color:#4caf50}.bad{color:#f44336}
-#log,#chatBox{max-width:420px;margin:10px auto;background:#222;padding:10px;text-align:left;border:1px solid #444}
-#chatBox{height:160px;overflow-y:auto}
-table{margin:auto;border-collapse:collapse}
-td,th{border:1px solid #555;padding:6px 12px}
+body{background:#111;color:#fff;text-align:center;font-family:sans-serif}
+input,button{padding:8px;margin:4px}
+#chat{border:1px solid #555;height:150px;overflow:auto;margin:10px}
+#alert{color:yellow;font-size:20px;margin:10px}
 </style>
 </head>
-
 <body>
 
 <h1>🎲 เกมทายตัวเลขออนไลน์</h1>
 
-<input id="name" placeholder="ชื่อมึง"><br>
-<input id="room" placeholder="รหัสห้อง"><br>
-<input id="roomPass" placeholder="รหัสเข้าห้อง"><br>
+<div id="alert"></div>
 
+<input id="name" placeholder="ชื่อมึง">
+<input id="room" placeholder="รหัสห้อง">
+<input id="roomPass" placeholder="รหัสห้อง (ถ้ามี)">
+<br>
 <button onclick="createRoom()">สร้างห้อง</button>
-<button onclick="resetRound()">รีเซ็ตรอบ (Host)</button>
-<button onclick="resetServer()">รีเซ็ตห้อง (แอดมิน)</button>
+<button onclick="joinRoom()">เข้าห้อง</button>
 
-<hr>
+<div id="game" style="display:none">
+  <h2 id="roomTitle"></h2>
 
-<input type="number" id="guess" placeholder="เลขที่เดา"><br>
-<button onclick="check()">เดาเลยไอ้สัส</button>
+  <input id="guess" type="number" placeholder="ทายเลข 1-100">
+  <button onclick="guessNum()">เดา</button>
+  <p id="result"></p>
 
-<div id="result"></div>
-
-<div id="log"><b>📜 ประวัติ</b></div>
-
-<h2>🏆 ตารางคะแนน</h2>
-<table>
-<thead><tr><th>#</th><th>ชื่อ</th><th>แต้ม</th></tr></thead>
-<tbody id="leaderboard"></tbody>
-</table>
-
-<h2>💬 แชท</h2>
-<div id="chatBox"></div>
-<input id="chatInput" placeholder="พิมพ์คุย">
-<button onclick="sendChat()">ส่ง</button>
-
-<audio id="soundCorrect" src="https://www.soundjay.com/buttons/sounds/button-4.mp3"></audio>
-<audio id="soundWrong" src="https://www.soundjay.com/buttons/sounds/button-10.mp3"></audio>
+  <h3>💬 แชท</h3>
+  <div id="chat"></div>
+  <input id="msg" placeholder="พิมพ์แชท">
+  <button onclick="sendMsg()">ส่ง</button>
+</div>
 
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
-import { getDatabase, ref, set, get, update, remove, onValue, push } 
+import { getDatabase, ref, set, get, push, onValue, remove } 
 from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
 
 const firebaseConfig = {
@@ -68,99 +53,116 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
-const ADMIN_PASSWORD = "1234";
 
-/* 🔧 แก้บั๊กตัวแปร input */
+// =================== ตัวแปรหลัก ===================
+let currentRoom = "";
+let answer = 0;
+
 const nameVal = () => document.getElementById("name").value.trim();
 const roomVal = () => document.getElementById("room").value.trim();
 const passVal = () => document.getElementById("roomPass").value.trim();
-const roomPath = r => `rooms/${r}`;
 
-async function checkRoom(room){
-  const s = await get(ref(db, roomPath(room)));
-  return s.exists() && s.val().password === passVal();
-}
-async function isHost(room,name){
-  const s = await get(ref(db, roomPath(room)));
-  return s.exists() && s.val().host === name;
-}
-
+// =================== สร้าง / เข้าห้อง ===================
 window.createRoom = async () => {
-  if(!nameVal() || !passVal()) return alert("ใส่ชื่อกับรหัสห้องก่อนดิไอ้เหี้ย");
-  const code = Math.random().toString(36).substring(2,8).toUpperCase();
-  document.getElementById("room").value = code;
+  if(!nameVal() || !roomVal())
+    return alert("ใส่ชื่อกับรหัสห้องก่อนดิไอ้เหี้ย");
 
-  await set(ref(db, roomPath(code)),{
+  answer = Math.floor(Math.random()*100)+1;
+
+  await set(ref(db,"rooms/"+roomVal()),{
     host:nameVal(),
     password:passVal(),
-    answer:Math.floor(Math.random()*100)+1,
-    scores:{},log:{},chat:{}
+    answer
   });
 
-  const link = `${location.origin}${location.pathname}?room=${code}`;
-  result.innerHTML = `สร้างห้อง <b>${code}</b><br>Host: <b>${nameVal()}</b><br>
-  ลิงก์เชิญ:<br><a href="${link}" target="_blank">${link}</a>`;
+  enterRoom();
 };
 
-window.check = async () => {
-  const r=roomVal(), n=nameVal(), g=guess.value;
-  if(!r||!n||!g) return;
-  if(!(await checkRoom(r))) return result.innerText="รหัสห้องผิด ไสหัวไป";
+window.joinRoom = async () => {
+  const snap = await get(ref(db,"rooms/"+roomVal()));
+  if(!snap.exists()) return alert("ไม่มีห้องไอ้สัส");
 
-  const s = await get(ref(db, roomPath(r)));
-  const ans = s.val().answer;
+  if(snap.val().password && snap.val().password !== passVal())
+    return alert("รหัสห้องผิด");
 
-  if(g==ans){
-    soundCorrect.play();
-    result.innerHTML=`<span class="good">🎉 ${n} ถูก (${g})</span>`;
-    const sr=ref(db,`${roomPath(r)}/scores/${n}`);
-    const sv=await get(sr); await set(sr, sv.exists()?sv.val()+1:1);
-    await push(ref(db,`${roomPath(r)}/log`),`🎉 ${n} ถูก (${g})`);
-    await update(ref(db,roomPath(r)),{answer:Math.floor(Math.random()*100)+1,log:{}});
-  }else if(g<ans){
-    soundWrong.play(); result.innerText="น้อยไปวะ";
-    await push(ref(db,`${roomPath(r)}/log`),`❌ ${n} เดา ${g} (น้อยไป)`);
-  }else{
-    soundWrong.play(); result.innerText="มากไปไอ้สัส";
-    await push(ref(db,`${roomPath(r)}/log`),`❌ ${n} เดา ${g} (มากไป)`);
+  answer = snap.val().answer;
+  enterRoom();
+};
+
+function enterRoom(){
+  currentRoom = roomVal();
+  game.style.display = "block";
+  roomTitle.innerText = "ห้อง " + currentRoom;
+
+  onValue(ref(db,"rooms/"+currentRoom+"/chat"), s=>{
+    chat.innerHTML="";
+    s.forEach(c=>{
+      chat.innerHTML += `<div>${c.val().name}: ${c.val().text}</div>`;
+    });
+  });
+}
+
+// =================== เกม ===================
+window.guessNum = ()=>{
+  const g = Number(guess.value);
+  if(!g) return;
+
+  if(g > answer) result.innerText = "มากไปวะ";
+  else if(g < answer) result.innerText = "น้อยไปไอ้เหี้ย";
+  else result.innerText = "ถูกแล้ว ไอ้สัส 🎉";
+};
+
+// =================== แชท ===================
+window.sendMsg = ()=>{
+  if(!msg.value) return;
+  push(ref(db,"rooms/"+currentRoom+"/chat"),{
+    name:nameVal(),
+    text:msg.value
+  });
+  msg.value="";
+};
+
+// =================== รีเซ็ตเซิร์ฟ + แจ้งเตือน ===================
+const RESET_INTERVAL = 30 * 60 * 1000; // 30 นาที
+const WARNING_TIME  = 5  * 60 * 1000; // เตือนก่อน 5 นาที
+
+async function autoResetServer(){
+  const now = Date.now();
+  const resetRef = ref(db,"lastReset");
+  const warnRef  = ref(db,"warned");
+
+  const snap = await get(resetRef);
+
+  if(!snap.exists()){
+    await set(resetRef, now);
+    await set(warnRef, false);
+    return;
   }
-  guess.value="";
-};
 
-window.resetRound = async () => {
-  const r=roomVal(), n=nameVal();
-  if(!(await checkRoom(r))) return alert("รหัสห้องผิด");
-  if(!(await isHost(r,n))) return alert("มึงไม่ใช่ Host รีไม่ได้");
-  await update(ref(db,roomPath(r)),{answer:Math.floor(Math.random()*100)+1,log:{}});
-  await push(ref(db,`${roomPath(r)}/log`),`👑 ${n} รีเซ็ตรอบ`);
-};
+  const diff = now - snap.val();
 
-window.sendChat = async () => {
-  const r=roomVal(), n=nameVal(), msg=chatInput.value;
-  if(!msg) return;
-  if(!(await checkRoom(r))) return alert("รหัสห้องผิด");
-  await push(ref(db,`${roomPath(r)}/chat`),{name:n,text:msg});
-  chatInput.value="";
-};
+  if(diff >= RESET_INTERVAL - WARNING_TIME){
+    const w = await get(warnRef);
+    if(!w.val()) await set(warnRef,true);
+  }
 
-window.resetServer = async () => {
-  const r=roomVal();
-  if(prompt("รหัสแอดมิน")!==ADMIN_PASSWORD) return alert("รหัสผิดไอ้เหี้ย");
-  await remove(ref(db,roomPath(r)));
-  result.innerText="💣 ล้างห้องแล้ว";
-};
+  if(diff >= RESET_INTERVAL){
+    await remove(ref(db,"rooms"));
+    await set(resetRef, now);
+    await set(warnRef,false);
+    alert.innerText = "💥 เซิร์ฟรีแล้ว เริ่มใหม่ไอ้เหี้ย";
+  }
+}
 
-onValue(ref(db),snap=>{
-  const r=roomVal(); const d=snap.child(roomPath(r)).val(); if(!d) return;
-  log.innerHTML="<b>📜 ประวัติ</b>";
-  d.log && Object.values(d.log).slice(-6).forEach(t=>log.innerHTML+=`<div>- ${t}</div>`);
-  leaderboard.innerHTML="";
-  d.scores && Object.entries(d.scores).sort((a,b)=>b[1]-a[1])
-  .forEach((v,i)=>leaderboard.innerHTML+=`<tr><td>${i+1}</td><td>${v[0]}</td><td>${v[1]}</td></tr>`);
-  chatBox.innerHTML="";
-  d.chat && Object.values(d.chat).slice(-20)
-  .forEach(c=>chatBox.innerHTML+=`<div><b>${c.name}:</b> ${c.text}</div>`);
+onValue(ref(db,"warned"), s=>{
+  if(s.val()){
+    alert.innerText = "⚠️ เซิร์ฟจะรีในอีก 5 นาที รีบเล่นซะไอ้สัส";
+  } else {
+    alert.innerText = "";
+  }
 });
+
+autoResetServer();
 </script>
 
 </body>
